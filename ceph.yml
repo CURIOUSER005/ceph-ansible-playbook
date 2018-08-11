@@ -1,0 +1,127 @@
+---
+- hosts: ceph
+  vars_files:
+    - vault.yml
+  tasks:
+  - ping:
+  - name: Subscription Registration
+    redhat_subscription:
+      state: present
+      username: "{{sub_name}}" 
+      password: "{{sub_pass}}"
+      auto_attach: true
+      pool: 8a85f98c63842fef0163949e5f9c4be0 
+  - name: Disabling all repos
+    rhsm_repository:
+      name: '*'
+      state: disabled
+  - name: Enabling Rhel-7-server
+    rhsm_repository:
+      name: rhel-7-server-*
+      state: enabled 
+  - name: Installing VIM
+    yum:
+      name: vim
+      state: latest
+  - name: Remove epel
+    yum_repository:
+      name: epel
+      state: absent
+  - name: Starting Firewall service
+    systemd:
+      state: started
+      name: firewalld
+      enabled: yes
+  - name: Creating User called ansi 
+    command: useradd ansi
+  - name: Giving password to user ansi
+    command: echo "ansi" | passwd --stdin ansi
+    command: echo "ansi ALL = (root) NOPASSWD:ALL" > /etc/sudoers.d/ansi
+    command: chmod 0440 /etc/sudoers.d/ansi
+  - name: Installing NTP
+    yum:
+      name: ntp
+      state: latest
+    systemd: 
+      state: started
+      name: ntp
+      enabled: yes
+    command: ntpq -p 
+
+- hosts: ceph_monitor
+  tasks:
+  - name: Enable Ceph Monitor repo
+    rhsm_repository:
+      name: rhel-7-server-rhceph-3-mon-rpms
+      state: enable
+  - name: Adding Port 6789
+    firewalld: 
+      zone: public
+      port: 6789/tcp
+      permanent: true
+      immediate: true
+      state: enabled 
+  - name: show kernel.pid_max
+    command: /usr/bin/cat /proc/sys/kernel/pid_max
+  - replace:
+      path: /etc/sysctl.conf
+      regexp: '^kernel.pid_max = *[0-9]*$'
+      replace: 'kernel.pid_max = 4194303'
+
+- hosts: ceph_osd
+  tasks:
+  - name: Enabling Ceph OSD repos on all OSD nodes   
+    rhsm_repository:
+      name: rhel-7-server-rhceph-3-osd-rpms
+      state: enabled
+
+- hosts: ceph_ansible
+  tasks:
+  - name: Enabling Ceph Ansible repo on Ansible Node
+    rhsm_repository:
+      name: rhel-7-server-rhceph-3-tools-rpms
+      state: enabled
+  - name: SSH Key Generation
+      shell : echo -e 'y\n'|ssh-keygen -q -t rsa -f ~/.ssh/id_rsa -C "" -N ""
+      register: output
+  - debug: var=output.stdout_lines
+  - name: copy ssh keys into nodes 
+    command: sshpass -p redhat ssh-copy-id -o StrictHostKeyChecking=no root@"{{item}}"
+    with_items:
+      - 192.168.122.215
+      - 192.168.122.216
+    command: sshpass -p ansi ssh-copy-id -o StrictHostKeyChecking=no ansi@"{{item}}"
+    with_items:
+      - 192.168.122.215
+      - 192.168.122.216
+  - name: Creating .ssh/config file
+    command: touch ~/.ssh/config
+    blockinfile:
+      path: ~/demo
+      block: |
+        Host node1
+          Hostname 192.168.122.214
+          User ansi
+        Host node2
+          Hostname 192.168.122.215
+          User ansi
+        Host node3
+          Hostname 192.168.122.214
+          User ansi
+    command: chmod 600 ~/.ssh/config
+  - name: Creating symbolic link
+    command: ln -s /usr/share/ceph-ansible/group_vars /etc/ansible/group_vars
+    command: su - ansi
+    command: cd /usr/share/ceph-ansible
+  - name: Creting copies of {all,osds,site}.yml files
+    copy:
+      src: "{{item.src}}"
+      dest: "{{item.des}}"
+    with_items:
+      - {src: group_vars/all.yml.sample, des: group_vars/all.yml}
+      - {src: group_vars/osds.yml.sample, des: group_vars/osds.yml}
+      - {src: group_vars/site.yml.sample, des: group_vars/site.yml} 
+   
+
+
+ 
